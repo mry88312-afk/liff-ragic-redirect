@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>LIFF UID 獲取與轉跳服務</title>
+  
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f0f0f0; }
+    .container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 400px; margin: auto; }
+    #status { font-size: 1.1em; color: #008000; font-weight: bold; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>LINE ID 連結中...</h2>
+    <div id="status">正在初始化 LIFF 並獲取使用者 ID...</div>
+    <p>請稍候，成功後將自動轉跳到 Ragic 表單。</p>
+  </div>
+
+  <script>
+    // 📢 【步驟一：替換您的 LIFF ID】
+    // 請將 'YOUR_LIFF_ID_HERE' 替換為您在 LINE Developers Console 申請的 LIFF ID。
+    const myLiffId = '2006833424-yWBoj4bN'; 
+    
+    // 📢 【步驟二：替換您的 Ragic 網址與欄位】
+    // 這是您的 Ragic 表單網址 (基礎部分)
+    const ragicBaseUrl = 'https://ap13.ragic.com/OnePlaceLiving/ragicfrequently-used-selections/14?webview&webaction=form&ver=new&version=2';
+    
+    // Ragic 用來接收 UID 的欄位參數名稱
+    const ragicUidField = 'pfv1019339'; 
+
+    function initializeLiff() {
+      liff.init({ liffId: myLiffId })
+        .then(() => {
+          document.getElementById('status').textContent = 'LIFF 初始化成功，正在獲取使用者 ID...';
+          
+          if (liff.isLoggedIn()) {
+            getLiffProfileAndRedirect();
+          } else {
+             // 如果未登入，引導登入 (此時在外部瀏覽器環境會安全地跳轉)
+             document.getElementById('status').textContent = '未登入 LINE，正在引導登入...';
+             liff.login();
+          }
+        })
+        .catch((err) => {
+          document.getElementById('status').textContent = `LIFF 初始化失敗，請檢查 LIFF ID: ${err.code}`;
+          console.error('LIFF Error:', err);
+        });
+    }
+
+    function getLiffProfileAndRedirect() {
+      liff.getProfile()
+        .then(profile => {
+          const userId = profile.userId;
+          document.getElementById('status').textContent = `成功獲取 UID，正在轉跳到 Ragic 表單...`;
+          
+          // 組合參數：&pfv1019339="Uxxxxxxx" (注意 Ragic 要求雙引號)
+          const encodedUid = encodeURIComponent(userId);
+          const redirectUrl = `${ragicBaseUrl}&${ragicUidField}="${encodedUid}"`;
+          
+          console.log('Redirecting to:', redirectUrl);
+          
+          // 執行轉跳到 Ragic 表單
+          window.location.replace(redirectUrl);
+          
+        })
+        .catch(err => {
+          document.getElementById('status').textContent = '無法取得使用者 UID，請檢查 LIFF 權限。';
+          console.error('Profile Error:', err);
+        });
+    }
+    
+    // 網頁載入時啟動流程
+    window.onload = initializeLiff;
+  </script>
+</body>
+</html>

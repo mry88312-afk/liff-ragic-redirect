@@ -58,8 +58,10 @@
           document.getElementById('status').textContent = `成功獲取 UID，正在轉跳到 Ragic 表單...`;
           
           // 組合參數：&pfv1019339="Uxxxxxxx" (注意 Ragic 要求雙引號)
+      // 組合參數：&pfv1019339=Uxxxxxxx (移除雙引號)
           const encodedUid = encodeURIComponent(userId);
-          const redirectUrl = `${ragicBaseUrl}&${ragicUidField}="${encodedUid}"`;
+          // 修改後的程式碼：
+          const redirectUrl = `${ragicBaseUrl}&${ragicUidField}=${encodedUid}`;
           
           console.log('Redirecting to:', redirectUrl);
           

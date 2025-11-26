@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>我要修繕</title>
+
+  <!-- LIFF SDK -->
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+
+  <style>
+    :root { color-scheme: dark; }
+    body{
+      margin:0; font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif;
+      background:#0b0f14; color:#e6edf3;
+    }
+    .wrap{ max-width:520px; margin:0 auto; padding:20px; }
+    .card{
+      background:#101826; border:1px solid #1f2a3a; border-radius:18px;
+      padding:16px; box-shadow:0 8px 30px rgba(0,0,0,.35);
+    }
+    .row{ display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+    button{
+      appearance:none; border:0; border-radius:14px; padding:12px 14px;
+      background:#2f81f7; color:#fff; font-weight:700; cursor:pointer;
+    }
+    button.secondary{ background:#1f2a3a; color:#e6edf3; }
+    button:disabled{ opacity:.6; cursor:not-allowed; }
+    code{
+      display:block; padding:10px 12px; border-radius:12px;
+      background:#0b1220; border:1px solid #22314a; overflow:auto;
+      font-size:13px; color:#cfe3ff;
+    }
+    .muted{ color:#9fb0c0; font-size:13px; line-height:1.5; }
+    .ok{ color:#7ee787; }
+    .warn{ color:#ffdf5d; }
+    .err{ color:#ff9b9b; }
+    .hide{ display:none; }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div id="title" style="font-size:18px;font-weight:800;">我要修繕</div>
+      <div id="status" class="muted" style="margin-top:8px;">初始化中…</div>
+
+      <div id="debugBox" class="hide" style="margin-top:14px;">
+        <div class="muted">（測試資訊）UID：</div>
+        <code id="uidBox">-</code>
+        <div class="row">
+          <button id="btnGoRepair" class="secondary">直接前往修繕（測試）</button>
+          <button id="btnGoBind" class="secondary">前往綁定表單（測試）</button>
+        </div>
+        <div class="muted" style="margin-top:10px;">
+          你還沒接 n8n 時，可以靠這兩顆按鈕測端到端跳轉是否正常。
+        </div>
+      </div>
+
+      <div class="muted" style="margin-top:14px;">
+        若卡住 5 秒以上，請回到 LINE 再點一次「我要修繕」。
+      </div>
+    </div>
+  </div>
+
+<script>
+/** =========================
+ *  ✅ 設定區（你只需要改這裡）
+ *  ========================= */
+
+// 1) 你的 LIFF ID
+const LIFF_ID = "2006833424-YW942oyx";
+
+// 2) 修繕表單（已綁定後要去的地方）
+//    你原本的：repair/24 + pfv1016370=uid
+const REPAIR_URL = (uid) =>
+  `https://ap13.ragic.com/OnePlaceLiving/repair/24?webview&webaction=form&ver=new&version=2&pfv1016370=${encodeURIComponent(uid)}`;
+
+// 3) （之後接上）n8n 檢查 uid 是否已綁定的 webhook
+//    期望回傳 JSON：{ "bound": true } 或 { "bound": false }
+//    也可回傳：{ "bound": true, "redirectUrl": "..." }
+const N8N_CHECK_UID_ENDPOINT = "https://kehsin.oneplace.com.tw/webhook-test/check-uid"; // 例如：https://你的n8n域名/webhook/check-uid
+
+// 4) （你想用 n8n 表單收電話）未綁定時要導去的「n8n 表單」網址
+//    系統會自動帶：?uid=...&next=...(修繕URL)
+//    n8n 表單送出後，你讓流程：用 uid+phone 綁定成功 -> redirect 到 next
+const N8N_BIND_FORM_URL = "https://kehsin.oneplace.com.tw/webhook-test/bind-by-phone"; // 例如：https://你的n8n域名/form/bind-phone
+
+// 5) 在 LINE 內開啟 Ragic / n8n 表單時，要用內開還是外開？
+//    - external:false 會在 LINE 內建瀏覽器開（通常最順）
+//    - external:true  會跳系統瀏覽器（有時某些站對內嵌較挑）
+const OPEN_EXTERNAL = false;
+
+/** ========================= */
+
+const $ = (id) => document.getElementById(id);
+const setStatus = (html, cls="muted") => {
+  $("status").className = cls;
+  $("status").textContent = html;
+};
+
+function openUrl(url){
+  // 在 LIFF 環境用 openWindow；不在則用 location
+  if (window.liff && liff.isInClient()) {
+    liff.openWindow({ url, external: OPEN_EXTERNAL });
+  } else {
+    location.href = url;
+  }
+}
+
+async function postJson(url, body){
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type":"application/json" },
+    body: JSON.stringify(body)
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+  return data;
+}
+
+async function main(){
+  await liff.init({ liffId: LIFF_ID });
+
+  if (!liff.isLoggedIn()){
+    // 會導回本頁
+    liff.login({ redirectUri: location.href });
+    return;
+  }
+
+  const profile = await liff.getProfile();
+  const uid = profile?.userId;
+
+  if (!uid) throw new Error("未取得 UID（請確認此頁確實用 LIFF 打開）");
+
+  const repairUrl = REPAIR_URL(uid);
+
+  // 測試 UI（n8n 未接時可用）
+  $("uidBox").textContent = uid;
+  $("btnGoRepair").onclick = () => openUrl(repairUrl);
+  $("btnGoBind").onclick = () => {
+    if (!N8N_BIND_FORM_URL) {
+      alert("尚未設定 N8N_BIND_FORM_URL");
+      return;
+    }
+    const bindUrl = `${N8N_BIND_FORM_URL}?uid=${encodeURIComponent(uid)}&next=${encodeURIComponent(repairUrl)}`;
+    openUrl(bindUrl);
+  };
+
+  // 還沒接 n8n：先讓你能架上線測試跳轉
+  if (!N8N_CHECK_UID_ENDPOINT){
+    setStatus("尚未接上 n8n 檢查流程，已進入測試模式。", "warn");
+    $("debugBox").classList.remove("hide");
+    return;
+  }
+
+  // 正式流程：先查 uid 是否已綁定
+  setStatus("檢查綁定狀態中…", "muted");
+  const resp = await postJson(N8N_CHECK_UID_ENDPOINT, { uid });
+
+  // 支援兩種回傳：
+  // A) { bound: true/false }
+  // B) { bound: true/false, redirectUrl: "..." }
+  const bound = !!resp?.bound;
+
+  if (bound){
+    setStatus("已綁定，前往修繕表單…", "ok");
+    openUrl(resp?.redirectUrl || repairUrl);
+    return;
+  }
+
+  // 未綁定 → 轉到 n8n 表單收電話
+  if (!N8N_BIND_FORM_URL){
+    setStatus("尚未綁定，但你尚未設定綁定表單網址（N8N_BIND_FORM_URL）。", "err");
+    $("debugBox").classList.remove("hide");
+    return;
+  }
+
+  setStatus("尚未綁定，將前往綁定表單…", "warn");
+  const bindUrl = `${N8N_BIND_FORM_URL}?uid=${encodeURIComponent(uid)}&next=${encodeURIComponent(repairUrl)}`;
+  openUrl(bindUrl);
+}
+
+main().catch(err => {
+  console.error(err);
+  setStatus(`發生錯誤：${err?.message || err}`, "err");
+  $("debugBox").classList.remove("hide");
+});
+</script>
+</body>
+</html>
